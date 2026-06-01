@@ -1,0 +1,62 @@
+substitutions:
+  _REGION: me-west1
+  _PROJECT: playground-488120
+  _REPO: asl-project
+  _IMAGE: asl-translator
+  _SERVICE: asl-translator
+
+steps:
+  # ── Step 1: Build the Docker image ────────────────────────────────────────
+  - name: 'gcr.io/cloud-builders/docker'
+    id: build
+    args:
+      - build
+      - '--no-cache'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_IMAGE}:latest'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_IMAGE}:${SHORT_SHA}'
+      - '.'
+
+  # ── Step 2: Push both tags to Artifact Registry ────────────────────────────
+  - name: 'gcr.io/cloud-builders/docker'
+    id: push-latest
+    waitFor: ['build']
+    args:
+      - push
+      - '${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_IMAGE}:latest'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    id: push-sha
+    waitFor: ['build']
+    args:
+      - push
+      - '${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_IMAGE}:${SHORT_SHA}'
+
+  # ── Step 3: Deploy to Cloud Run ────────────────────────────────────────────
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: deploy
+    waitFor: ['push-latest', 'push-sha']
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - '${_SERVICE}'
+      - '--image=${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_IMAGE}:${SHORT_SHA}'
+      - '--region=${_REGION}'
+      - '--platform=managed'
+      - '--allow-unauthenticated'
+      - '--port=8501'
+      - '--memory=2Gi'
+      - '--cpu=2'
+      - '--min-instances=0'
+      - '--max-instances=3'
+      - '--timeout=300'
+
+# Store built images in Artifact Registry
+images:
+  - '${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_IMAGE}:latest'
+  - '${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/${_IMAGE}:${SHORT_SHA}'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
