@@ -4,6 +4,78 @@ import cv2
 import tensorflow as tf
 import numpy as np
 from collections import deque, Counter
+import os
+import json
+import base64
+import urllib.request
+
+def get_ice_servers():
+    # Always include Google STUN server by default
+    ice_servers = [{"urls": ["stun:stun.l.google.com:19302"]}]
+    
+    twilio_sid = os.environ.get("TWILIO_ACCOUNT_SID")
+    twilio_token = os.environ.get("TWILIO_AUTH_TOKEN")
+    metered_key = os.environ.get("METERED_API_KEY")
+    turn_url = os.environ.get("TURN_SERVER_URL")
+    turn_username = os.environ.get("TURN_SERVER_USERNAME")
+    turn_credential = os.environ.get("TURN_SERVER_CREDENTIAL")
+    
+    # Safely try fetching from streamlit secrets if env vars aren't present
+    try:
+        if not twilio_sid and "TWILIO_ACCOUNT_SID" in st.secrets:
+            twilio_sid = st.secrets["TWILIO_ACCOUNT_SID"]
+        if not twilio_token and "TWILIO_AUTH_TOKEN" in st.secrets:
+            twilio_token = st.secrets["TWILIO_AUTH_TOKEN"]
+        if not metered_key and "METERED_API_KEY" in st.secrets:
+            metered_key = st.secrets["METERED_API_KEY"]
+        if not turn_url and "TURN_SERVER_URL" in st.secrets:
+            turn_url = st.secrets["TURN_SERVER_URL"]
+        if not turn_username and "TURN_SERVER_USERNAME" in st.secrets:
+            turn_username = st.secrets["TURN_SERVER_USERNAME"]
+        if not turn_credential and "TURN_SERVER_CREDENTIAL" in st.secrets:
+            turn_credential = st.secrets["TURN_SERVER_CREDENTIAL"]
+    except Exception:
+        pass
+
+    # 1. Fetch Twilio TURN Servers if credentials are provided
+    if twilio_sid and twilio_token:
+        try:
+            url = f"https://api.twilio.com/2010-04-01/Accounts/{twilio_sid}/Tokens.json"
+            req = urllib.request.Request(url, method="POST")
+            auth_str = f"{twilio_sid}:{twilio_token}"
+            auth_b64 = base64.b64encode(auth_str.encode("utf-8")).decode("utf-8")
+            req.add_header("Authorization", f"Basic {auth_b64}")
+            with urllib.request.urlopen(req, timeout=5) as response:
+                data = json.loads(response.read().decode("utf-8"))
+                twilio_servers = data.get("ice_servers", [])
+                if twilio_servers:
+                    return twilio_servers
+        except Exception as e:
+            st.sidebar.warning(f"Note: Twilio auth failed. Falling back to default configuration.")
+
+    # 2. Fetch Metered (Open Relay) TURN Servers if API key is provided
+    if metered_key:
+        try:
+            url = f"https://openrelay.metered.ca/api/v1/turn/credentials?apiKey={metered_key}"
+            req = urllib.request.Request(url, method="GET")
+            with urllib.request.urlopen(req, timeout=5) as response:
+                metered_servers = json.loads(response.read().decode("utf-8"))
+                if metered_servers:
+                    return metered_servers
+        except Exception as e:
+            st.sidebar.warning(f"Note: Metered auth failed. Falling back to default configuration.")
+
+    # 3. Add manual TURN server if explicitly provided
+    if turn_url:
+        manual_server = {"urls": [turn_url]}
+        if turn_username:
+            manual_server["username"] = turn_username
+        if turn_credential:
+            manual_server["credential"] = turn_credential
+        ice_servers.append(manual_server)
+
+    return ice_servers
+
 
 # 1. הגדרות דף האפליקציה
 # פונקציה שקובעת את כותרת הטאב בדפדפן ואת פריסת הדף (רחבה)
@@ -130,7 +202,7 @@ st.write("Hold your hand signs within the green box to start translating")
 webrtc_streamer(
     key="asl-translator",
     mode=WebRtcMode.SENDRECV,
-    rtc_configuration=RTCConfiguration({"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}),
+    rtc_configuration=RTCConfiguration({"iceServers": get_ice_servers()}),
     video_processor_factory=ASLVideoProcessor,
     async_processing=True,
 )
